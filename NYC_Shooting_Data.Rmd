@@ -1,0 +1,229 @@
+---
+title: "NYC Shooting Data"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+date: "2025-02-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+
+## R Markdown
+
+# Dataset
+Below is the dataset we will be using for the project
+https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD
+
+
+# Reading in the Dataset
+```{r dataset}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+shooting_data <- read_csv(url_in)
+
+```
+# Clean the Data
+
+To Clean the data we need to standardize the missing values in Age Group, Sex and Race, and then convert columns to factors. In the top portion o the code we are standardizing across the values of "Unknown, UNKNOWN,(null),U and (Other)"
+
+```{r data_cleaning}
+cleaned_data <- shooting_data %>%
+  # Standardize missing and inconsistent values
+  mutate(
+    PERP_AGE_GROUP = ifelse(is.na(PERP_AGE_GROUP) | 
+                            PERP_AGE_GROUP %in% c("(null)", "(Other)", "UNKNOWN"), 
+                            "Unknown", PERP_AGE_GROUP),
+    
+    PERP_SEX = ifelse(is.na(PERP_SEX) | 
+                      PERP_SEX %in% c("(null)", "U", "UNKNOWN", "unknown"), 
+                      "Unknown", PERP_SEX),
+    
+    PERP_RACE = ifelse(is.na(PERP_RACE) | 
+                       PERP_RACE %in% c("(null)", "(Other)", "UNKNOWN", "unknown"), 
+                       "Unknown", PERP_RACE),
+    
+    VIC_AGE_GROUP = ifelse(is.na(VIC_AGE_GROUP) | 
+                           VIC_AGE_GROUP %in% c("UNKNOWN"), 
+                           "Unknown", VIC_AGE_GROUP),
+    
+    VIC_SEX = ifelse(is.na(VIC_SEX) | 
+                     VIC_SEX %in% c("(null)", "U", "UNKNOWN"), 
+                     "Unknown", VIC_SEX),
+    
+    # Correct incorrect VIC_AGE_GROUP values (e.g., "1022" likely a data entry error)
+    VIC_AGE_GROUP = ifelse(VIC_AGE_GROUP == "1022", "Unknown", VIC_AGE_GROUP)
+  ) %>%
+  # Convert to appropriate data types
+  mutate(
+    OCCUR_DATE = as.Date(OCCUR_DATE, format="%m/%d/%Y"),
+    BORO = as.factor(BORO),
+    LOC_OF_OCCUR_DESC = as.factor(LOC_OF_OCCUR_DESC),
+    PRECINCT = as.factor(PRECINCT),
+    STATISTICAL_MURDER_FLAG = as.factor(STATISTICAL_MURDER_FLAG),
+    PERP_AGE_GROUP = as.factor(PERP_AGE_GROUP),
+    PERP_SEX = as.factor(PERP_SEX),
+    PERP_RACE = as.factor(PERP_RACE),
+    VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),
+    VIC_SEX = as.factor(VIC_SEX),
+    VIC_RACE = as.factor(VIC_RACE)
+  ) %>%
+  select(-c(JURISDICTION_CODE, X_COORD_CD, Y_COORD_CD, Longitude, Latitude, Lon_Lat, OCCUR_TIME))  # Dropping unnecessary columns
+
+```
+
+
+
+# Summary of cleaned data
+``` {r }
+summary(cleaned_data)
+
+```
+# Shootings Over Time Visualization
+```{r shootings_time_graph, fig.align='center'}
+shootings_by_year <- cleaned_data %>%
+  mutate(year = format(OCCUR_DATE, "%Y")) %>%
+  group_by(year) %>%
+  summarise(count = n())
+
+ggplot(shootings_by_year, aes(x = as.numeric(year), y = count)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Yearly Shooting Incidents in NYC",
+       x = "Year",
+       y = "Number of Shootings") +
+  theme_minimal()
+```
+There seems to be  trend in shootings where they fell before covid but then spiked agai during covid. Is there a seasonality component?
+
+# Seasonality
+```{r new_shootings_per_month, fig.align='center'}
+shootings_by_month <- cleaned_data %>%
+  mutate(month = format(OCCUR_DATE, "%Y-%m")) %>%
+  group_by(month) %>%
+  summarise(count = n()) %>%
+  mutate(new_shootings = count - lag(count))
+
+ggplot(shootings_by_month, aes(x = as.Date(paste0(month, "-01")), y = new_shootings)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "New Shooting Incidents Per Month in NYC",
+       x = "Month",
+       y = "New Shootings") +
+  theme_minimal()
+
+```
+This looks like there is likely seasonality but there is a lot of noise on the chart
+```{r seasonal_percentage}
+# Extract year and month
+seasonality_data <- cleaned_data %>%
+  mutate(
+    year = format(OCCUR_DATE, "%Y"),
+    month = format(OCCUR_DATE, "%m")
+  ) %>%
+  group_by(year, month) %>%
+  summarise(monthly_shootings = n()) %>%
+  group_by(year) %>%
+  mutate(percent_of_year = (monthly_shootings / sum(monthly_shootings)) * 100)
+
+```
+
+
+# Create a heatmap
+```{r heatmap, fig.align='center'}
+ggplot(seasonality_data, aes(x = month, y = year, fill = percent_of_year)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "red") +
+  labs(title = "Seasonal Shooting Patterns in NYC",
+       x = "Month",
+       y = "Year",
+       fill = "% of Yearly Shootings") +
+  theme_minimal()
+
+
+```
+There seems to be some increase in the summer time, lets explore.
+
+```{r seasonality_summary}
+# Compute long-term seasonality
+average_seasonality <- seasonality_data %>%
+  group_by(month) %>%
+  summarise(avg_percent = mean(percent_of_year))
+
+# Print the average percentage per month
+print(average_seasonality)
+```
+Our hypothesis was confirmed, there is a pickup in shootings in the summer time.
+
+
+# Shootings by Borough
+```{r shootings_borough_graph,fig.align='center'}
+ggplot(cleaned_data, aes(x = BORO, fill = BORO)) +
+  geom_bar() +
+  labs(title = "Number of Shootings by Borough",
+       x = "Borough",
+       y = "Number of Incidents") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+Brooklyn and the Bronx have more shootings than other Boroughs while Staten Island has the fewest. This data would probably be better to look at adjusted by population and shown per capita.
+
+Lets add in the population from the 2020 census and show this per capita.
+
+```{r normalized_shootings_by_borough, fig.align="center"}
+# Manually define population by borough
+borough_population <- tibble(
+  BORO = c("BRONX", "BROOKLYN", "MANHATTAN", "QUEENS", "STATEN ISLAND"),
+  population = c(1472654, 2736074, 1694251, 2405464, 495747)
+)
+
+# Compute shootings per 100,000 residents
+borough_shootings <- cleaned_data %>%
+  group_by(BORO) %>%
+  summarise(total_shootings = n()) %>%
+  left_join(borough_population, by = "BORO") %>%
+  mutate(shootings_per_100k = (total_shootings / population) * 100000)
+
+# Create the population-adjusted bar chart
+ggplot(borough_shootings, aes(x = reorder(BORO, shootings_per_100k), y = shootings_per_100k, fill = BORO)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Shootings Per 100,000 Residents by Borough",
+       x = "Borough",
+       y = "Shootings per 100K Residents") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+## **Conclusion**
+Our analysis of NYC shooting incidents provided valuable insights into historical trends, seasonal patterns, and borough-level disparities. Through data visualization and normalization techniques, we uncovered key findings:
+
+- **Temporal Trends**: The number of shootings has fluctuated over time, with certain periods (the COVID-19 Pandemic) experiencing sharp increases. Our monthly seasonality analysis showed that shootings tend to peak during summer months.
+- **Borough Disparities**: While Brooklyn and the Bronx have the highest total shootings, normalizing by population revealed that the Bronx experiences the most shootings per capita.
+
+---
+
+## **Potential Sources of Bias**
+### Data Collection Bias
+- The dataset only includes reported shooting incidents. Unreported or misclassified cases may lead to undercounting in certain areas.
+- Changes in policing practices (e.g., increased law enforcement presence in certain boroughs) might impact shooting reporting rates, rather than actual crime levels.
+
+### Temporal Bias
+- Our dataset covers shootings from 2006–2023, but historical crime patterns before 2006 are not accounted for.
+- Recent trends could be influenced by policy changes, socio-economic shifts, or the COVID-19 pandemic, making it difficult to compare past and present data directly.
+
+###  Personal Bias
+- As analysts, we may have unintentionally focused on trends that seemed more interesting** while overlooking less obvious patterns.
+- To mitigate personal bias, we:
+  - Used data-driven metrics (e.g., normalizing by population) instead of making assumptions.
+  - Visualized data before drawing conclusions to prevent selective interpretation.
+  - Considered alternative explanations for our findings, such as law enforcement reporting differences.
+
+---
+
+
